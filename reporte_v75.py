@@ -358,9 +358,15 @@ Totales: {t_tot_v} | Efectividad: {wr_tot_v:.2f}% ({w_tot_v}W / {l_tot_v}L)
     # ==========================================
     print("🎨 Generando imagen HMI V2.0...")
     velas_a_graficar = 3000 
-    df_plot = datos.tail(velas_a_graficar)
-    fecha_inicio_plot = df_plot.index[0]
-    ultimo_tiempo = df_plot.index[-1]
+
+    # 1. Copiamos los datos
+    df_plot = datos.tail(velas_a_graficar).copy()
+    
+    # 2. EL PARCHE NUCLEAR: Convertimos todo el índice de fechas a texto
+    df_plot.index = df_plot.index.astype(str)
+    
+    fecha_inicio_plot = datos.index[-velas_a_graficar]
+    ultimo_tiempo = datos.index[-1]
 
     zonas_v20 = df_zonas_perfectas[df_zonas_perfectas['Fecha_OB'] >= fecha_inicio_plot]
 
@@ -376,10 +382,14 @@ Totales: {t_tot_v} | Efectividad: {wr_tot_v:.2f}% ({w_tot_v}W / {l_tot_v}L)
     for _, zona in zonas_v20.iterrows():
         top_y = zona['OB_High']
         bottom_y = zona['OB_Low']
-        start_x = zona['Fecha_OB']
         
-        if pd.notna(zona.get('Fecha_Entrada')): end_x = zona['Fecha_Entrada']
-        else: end_x = ultimo_tiempo 
+        # --- EL PARCHE: Convertir fechas a texto (String) ---
+        start_x = str(zona['Fecha_OB'])
+        
+        if pd.notna(zona.get('Fecha_Entrada')): 
+            end_x = str(zona['Fecha_Entrada'])
+        else: 
+            end_x = str(ultimo_tiempo)
             
         resultado = zona.get('Resultado', 'Pendiente')
         if resultado == 'Win': color = 'rgba(0, 255, 0, 0.3)'
@@ -400,13 +410,15 @@ Totales: {t_tot_v} | Efectividad: {wr_tot_v:.2f}% ({w_tot_v}W / {l_tot_v}L)
                 y_precio_prev = datos.loc[zona['Fecha_Prev']]['high']
                 y_precio_ob = zona['OB_High']
                 
+            fecha_prev_str = str(zona['Fecha_Prev'])
+            
             fig.add_trace(go.Scatter(
-                x=[zona['Fecha_Prev'], zona['Fecha_OB']], y=[y_precio_prev, y_precio_ob],
+                x=[fecha_prev_str, start_x], y=[y_precio_prev, y_precio_ob],
                 mode='lines', line=dict(color='red', width=2, dash='dot'), showlegend=False
             ), row=1, col=1)
             
             fig.add_trace(go.Scatter(
-                x=[zona['Fecha_Prev'], zona['Fecha_OB']], y=[zona['RSI_Prev'], zona['RSI_OB']],
+                x=[fecha_prev_str, start_x], y=[zona['RSI_Prev'], zona['RSI_OB']],
                 mode='lines', line=dict(color='lime', width=2, dash='solid'), showlegend=False
             ), row=2, col=1)
 
@@ -416,7 +428,7 @@ Totales: {t_tot_v} | Efectividad: {wr_tot_v:.2f}% ({w_tot_v}W / {l_tot_v}L)
         texto_etiqueta = f"{'▲' if zona['Tipo'] == 'Compra' else '▼'} {zona['Estrellas']}"
         
         fig.add_annotation(
-            x=zona['Fecha_OB'], y=zona['OB_High'] if zona['Tipo'] == 'Compra' else zona['OB_Low'],
+            x=start_x, y=zona['OB_High'] if zona['Tipo'] == 'Compra' else zona['OB_Low'],
             text=texto_etiqueta, showarrow=False, 
             yshift=18 if zona['Tipo'] == 'Compra' else -18,
             font=dict(size=tamano_texto, color=color_texto), row=1, col=1
