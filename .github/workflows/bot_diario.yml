@@ -28,4 +28,6 @@ jobs:
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      run: python reporte_v75.py
+      run: |
+        python reporte_v75.py
+        python reporte_boom500.py
