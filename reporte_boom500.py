@@ -330,7 +330,7 @@ async def main():
     # 📱 PREPARANDO EL REPORTE PARA TELEGRAM
     # ==========================================
     mensaje_telegram = f"""
-📈 REPORTE CUANTITATIVO DIARIO - V75 📉
+📈 REPORTE CUANTITATIVO DIARIO - BOOM 500 📉
 
 🟢 COMPRAS (LONGS)
 Totales: {t_tot_c} | Efectividad: {wr_tot_c:.2f}% ({w_tot_c}W / {l_tot_c}L)
