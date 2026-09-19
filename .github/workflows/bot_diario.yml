@@ -1,16 +1,6 @@
 name: Motor Cuantitativo V75
 
-on:
-  schedule:
-    # Mañana: 10:47 UTC (06:47 AM hora local de Bolivia)
-    - cron: '47 10 * * *'
-    
-    # Mediodía: 15:47 UTC (11:47 AM hora local de Bolivia)
-    - cron: '47 15 * * *'
-    
-    # Tarde: 22:17 UTC (06:17 PM hora local de Bolivia)
-    - cron: '17 22 * * *'
-    
+on:   
   workflow_dispatch: # Te permite ejecutarlo manualmente con un botón
 
 jobs:
