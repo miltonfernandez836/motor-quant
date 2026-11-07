@@ -459,7 +459,7 @@ Totales: {t_tot_v} | Efectividad: {wr_tot_v:.2f}% ({w_tot_v}W / {l_tot_v}L)
     fig.update_xaxes(matches='x')
     
     # GUARDAR LA IMAGEN (Reemplaza fig.show())
-    ruta_imagen = 'reporte_zonas.png'
+    ruta_imagen = 'reporte_boom500.png'
     fig.write_image(ruta_imagen)
     print("✅ Imagen guardada correctamente.")
 
