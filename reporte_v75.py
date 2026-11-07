@@ -22,7 +22,7 @@ TOKEN_DERIV = os.getenv('DER_TOK')
 
 async def motor_principal():
     print("🚀 Iniciando Motor V1.3 (Calculando RSI y TODOS los sensores)...")
-    api = DerivAPI(app_id=1089)
+    api = DerivAPI(app_id="34TGpDpnQJMJBbalFz1MX")
     
     try:
         print("🔐 Autenticando conexión con el servidor...")
