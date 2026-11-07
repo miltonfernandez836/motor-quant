@@ -470,5 +470,10 @@ Totales: {t_tot_v} | Efectividad: {wr_tot_v:.2f}% ({w_tot_v}W / {l_tot_v}L)
 # EJECUCIÓN DEL SCRIPT
 # ==========================================
 if __name__ == '__main__':
-    asyncio.run(main())
-    sys.exit(0)
+    try:
+        # Le damos un máximo de 60 segundos a todo el proceso para completarse
+        asyncio.run(asyncio.wait_for(main(), timeout=60.0))
+    except asyncio.TimeoutError:
+        print("❌ Error: La conexión con Deriv se quedó colgada (Timeout de 60s).")
+    finally:
+        sys.exit(0) # Apaga el proceso y evita que se vuelva un zombi
