@@ -22,8 +22,17 @@ TOKEN_DERIV = os.getenv('DER_TOK')
 
 async def motor_principal():
     print("🚀 Iniciando Motor V1.3 (Calculando RSI y TODOS los sensores)...")
-    api = DerivAPI(app_id="34TGpDpnQJMJBbalFz1MX")
+
+    if TOKEN_DERIV:
+        print("🕵️ DIAGNÓSTICO: ✅ Token de Deriv detectado correctamente en el servidor.")
+    else:
+        print("🕵️ DIAGNÓSTICO: ❌ EL TOKEN ESTÁ VACÍO. Revisa el archivo bot_diario.yml.")
+        return None
+
+    api = DerivAPI(app_id=1089)
+
     
+   
     try:
         print("🔐 Autenticando conexión con el servidor...")
         await api.authorize(TOKEN_DERIV)
