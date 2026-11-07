@@ -26,6 +26,7 @@ jobs:
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        DERIV_TOKEN: ${{ secrets.DER_TOK }}
         PYTHONUNBUFFERED: "1"
       run: |
         python reporte_v75.py
