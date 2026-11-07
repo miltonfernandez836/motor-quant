@@ -20,12 +20,13 @@ jobs:
     - name: Instalar librerías
       run: |
         python -m pip install --upgrade pip
-        pip install python-deriv-api pandas numpy plotly requests kaleido
+        pip install python-deriv-api pandas numpy plotly requests kaleido==0.1.0.post1
 
     - name: Ejecutar motor y enviar a Telegram
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        PYTHONUNBUFFERED: "1"
       run: |
         python reporte_v75.py
         python reporte_boom500.py
