@@ -18,7 +18,7 @@ CANTIDAD = 5000
 # ==========================================
 TOKEN_TELEGRAM = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID_TELEGRAM = os.getenv('TELEGRAM_CHAT_ID')
-TOKEN_DERIV = os.getenv('DER_TOK')
+TOKEN_DERIV = os.getenv('DERIV_TOKEN')
 
 async def motor_principal():
     print("🚀 Iniciando Motor V1.3 (Calculando RSI y TODOS los sensores)...")
