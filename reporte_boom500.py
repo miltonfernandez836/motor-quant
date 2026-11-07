@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 import requests
 import os
+import sys
 
 # --- CONFIGURACIÓN V1.3 ---
 ACTIVO = 'BOOM500'
@@ -470,3 +471,4 @@ Totales: {t_tot_v} | Efectividad: {wr_tot_v:.2f}% ({w_tot_v}W / {l_tot_v}L)
 # ==========================================
 if __name__ == '__main__':
     asyncio.run(main())
+    sys.exit(0)
