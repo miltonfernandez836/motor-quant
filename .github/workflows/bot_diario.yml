@@ -6,6 +6,7 @@ on:
 jobs:
   ejecutar-reporte:
     runs-on: ubuntu-latest
+    timeout-minutes: 5 # <--- ESTE ES EL SEGURO ANTI-ZOMBIES
 
     steps:
     - name: Clonar el código
