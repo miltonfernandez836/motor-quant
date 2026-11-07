@@ -18,12 +18,16 @@ CANTIDAD = 5000
 # ==========================================
 TOKEN_TELEGRAM = os.getenv('TELEGRAM_TOKEN')
 CHAT_ID_TELEGRAM = os.getenv('TELEGRAM_CHAT_ID')
+TOKEN_DERIV = os.getenv('DER_TOK')
 
 async def motor_principal():
     print("🚀 Iniciando Motor V1.3 (Calculando RSI y TODOS los sensores)...")
     api = DerivAPI(app_id=1089)
     
     try:
+        print("🔐 Autenticando conexión con el servidor...")
+        await api.authorize(TOKEN_DERIV)
+        
         print("📡 Descargando datos...")
         response = await api.ticks_history({
             'ticks_history': ACTIVO, 'style': 'candles',
