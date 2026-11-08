@@ -1,33 +1,37 @@
 name: Motor Cuantitativo V75
 
-on:   
-  workflow_dispatch: # Te permite ejecutarlo manualmente con un botón
+on:
+  workflow_dispatch: # Solo manual / disparado por el servicio de cronjob externo
 
 jobs:
   ejecutar-reporte:
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # <--- ESTE ES EL SEGURO ANTI-ZOMBIES
+    timeout-minutes: 10 # Seguro anti-zombies
 
     steps:
     - name: Clonar el código
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Configurar Python 3.10
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: 'pip'
 
     - name: Instalar librerías
       run: |
         python -m pip install --upgrade pip
-        pip install python-deriv-api pandas numpy plotly requests kaleido==0.1.0
+        pip install websockets pandas numpy "plotly<6" requests kaleido==0.2.1
 
-    - name: Ejecutar motor y enviar a Telegram
+    - name: Ejecutar motores y enviar a Telegram
       env:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        DERIV_TOKEN: ${{ secrets.DER_TOK }}
         PYTHONUNBUFFERED: "1"
       run: |
-        python reporte_v75.py
-        python reporte_boom500.py
+        fallos=0
+        for script in reporte_v75.py reporte_boom500.py reporte_boom1000.py; do
+          echo "=== $script ==="
+          python "$script" || fallos=$((fallos+1))
+        done
+        exit $fallos

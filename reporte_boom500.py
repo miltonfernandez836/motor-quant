@@ -1,5 +1,5 @@
 import asyncio
-from deriv_api import DerivAPI
+from deriv_datos import descargar_velas
 import pandas as pd
 import numpy as np
 from plotly.subplots import make_subplots
@@ -26,20 +26,9 @@ async def motor_principal():
     if TOKEN_DERIV:
         print("🕵️ DIAGNÓSTICO: ✅ Token de Deriv detectado correctamente en el servidor.")
 
-    api = DerivAPI(app_id=1089)
-   
     try:
-
         print("📡 Descargando datos...")
-        response = await api.ticks_history({
-            'ticks_history': ACTIVO, 'style': 'candles',
-            'granularity': INTERVALO, 'count': CANTIDAD, 'end': 'latest'
-        })
-        
-        df = pd.DataFrame(response['candles'])
-        df['datetime'] = pd.to_datetime(df['epoch'], unit='s')
-        df.set_index('datetime', inplace=True)
-        df.drop(columns=['epoch'], inplace=True)
+        df = await descargar_velas(ACTIVO, INTERVALO, CANTIDAD)
         
         # --- NUEVO SENSOR: RSI (14) ---
         delta = df['close'].diff()
@@ -60,9 +49,8 @@ async def motor_principal():
         return df
 
     except Exception as e:
-        print(f"❌ Error: {e}")
-    finally:
-        await api.disconnect()  
+        print(f"❌ Error descargando datos de Deriv: {e!r}")
+        return None
 
 # ==========================================
 # 🧠 BLOQUE PRINCIPAL DEL PROGRAMA
@@ -72,7 +60,7 @@ async def main():
     
     if datos is None:
         print("Error descargando datos. Saliendo...")
-        return
+        sys.exit(1)
 
     print("⚖️ Ejecutando Juez V2.0 (Motor Híbrido SMC + IA 👁️)...")
 
@@ -471,15 +459,15 @@ Totales: {t_tot_v} | Efectividad: {wr_tot_v:.2f}% ({w_tot_v}W / {l_tot_v}L)
             print("✅ ¡Reporte enviado con éxito a tu celular!")
         else:
             print(f"❌ Error al enviar: {respuesta.text}")
+            sys.exit(1)
 
 # ==========================================
 # EJECUCIÓN DEL SCRIPT
 # ==========================================
 if __name__ == '__main__':
     try:
-        # Le damos un máximo de 60 segundos a todo el proceso para completarse
-        asyncio.run(asyncio.wait_for(main(), timeout=60.0))
+        # Máximo 120 s para todo el proceso (descarga paginada + backtest + gráfico + Telegram)
+        asyncio.run(asyncio.wait_for(main(), timeout=120.0))
     except asyncio.TimeoutError:
-        print("❌ Error: La conexión con Deriv se quedó colgada (Timeout de 60s).")
-    finally:
-        sys.exit(0) # Apaga el proceso y evita que se vuelva un zombi
+        print("❌ Error: timeout de 120s (conexión con Deriv colgada).")
+        sys.exit(1)
