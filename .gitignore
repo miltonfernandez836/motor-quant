@@ -5,3 +5,6 @@ reporte_smc.html
 # Temporales de Python / pytest
 __pycache__/
 .pytest_cache/
+
+# Caché local de velas (solo --dry-run)
+.cache_smc/

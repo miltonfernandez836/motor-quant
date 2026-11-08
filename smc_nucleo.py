@@ -32,6 +32,22 @@ CONFIG = {
     "MAX_ZONAS_FICHA": 5,     # zonas vivas más cercanas al precio que se muestran
     "MAX_FUERA_RANGO": 10,    # zonas H1/H4 vivas fuera del rango visible que se listan en el mensaje
     "MAX_LIBRES": 60,         # tope de pivotes sin barrer que se vigilan a la vez
+    # --- Red y tiempos (los usan datos_smc.py y reporte_smc.py; el núcleo no los lee) ---
+    "RED": {                          # perfil de PRODUCCIÓN (GitHub Actions, timeout-minutes: 5)
+        "TIMEOUT_GLOBAL_S": 180,      # watchdog: a los 180 s el proceso se mata
+        "MARGEN_TIMEOUT_S": 15,       # el timeout "amable" salta antes (180-15) para poder avisar a Telegram
+        "TIMEOUT_PETICION_S": 30,     # tope duro de cada petición a Deriv
+        "ESPERAS_S": (20, 40, 60),    # 3 reintentos, con estas esperas antes de cada uno
+        "PAUSA_S": 3,                 # pausa entre peticiones
+    },
+    "RED_LARGO": {                    # --modo-largo: 8 reintentos (20 s x intento), para uso manual
+        "TIMEOUT_GLOBAL_S": 540,
+        "MARGEN_TIMEOUT_S": 15,
+        "TIMEOUT_PETICION_S": 60,
+        "ESPERAS_S": tuple(20 * i for i in range(1, 9)),
+        "PAUSA_S": 3,
+    },
+    "CACHE_MAX_EDAD_S": 3600,         # solo --dry-run: reutiliza las velas si tienen menos de 1 hora
     # --- Capas opcionales (Fase 2/3; lógica aún no implementada) ---
     "CAPAS": {
         "fvg_ifc": False,             # Fase 2

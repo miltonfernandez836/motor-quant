@@ -20,12 +20,10 @@ import plotly.graph_objects as go
 import requests
 
 import smc_nucleo as smc
-from datos_smc import descargar_todo
+from datos_smc import ErrorDescarga, cargar_cache, descargar_todo, guardar_cache
 
 SIMBOLO = "BOOM500"
 NOMBRE_ACTIVO = "BOOM 500"
-TIMEOUT_GLOBAL_S = 540          # el workflow corta a los 10 min (600 s)
-WATCHDOG_S = TIMEOUT_GLOBAL_S + 30  # hilo aparte: mata el proceso si el bucle asyncio se cuelga
 LIMITE_CAPTION = 1024           # máximo de texto de una foto en Telegram
 FIN_MENSAJE = "Lista de zonas vivas, no es señal de entrada"
 VELA_S = 900
@@ -297,13 +295,51 @@ def enviar_telegram(token, chat_id, ruta_png, mensaje):
 # =====================================================================
 # Orquestación
 # =====================================================================
+class ErrorReporte(RuntimeError):
+    """Fallo del reporte con motivo legible: se avisa a Telegram y el proceso termina con código 1."""
+
+
+_AVISADO = threading.Event()   # evita avisar dos veces (camino amable + watchdog)
+
+
+def _sin_secretos(texto, *secretos):
+    for s in secretos:
+        if s:
+            texto = texto.replace(s, "***")
+    return texto
+
+
+def notificar_error(motivo, token, chat_id, dry_run=False, timeout_http=10):
+    """Mensaje corto a Telegram con el motivo del fallo (mejor esfuerzo). True si se envió."""
+    _AVISADO.set()
+    texto = f"⚠️ Reporte SMC {NOMBRE_ACTIVO} falló: {_sin_secretos(str(motivo), token, chat_id)}"[:400]
+    print(texto, flush=True)
+    if dry_run:
+        print("(--dry-run: no se avisa a Telegram)", flush=True)
+        return False
+    if not (token and chat_id):
+        print("(sin TELEGRAM_TOKEN / TELEGRAM_CHAT_ID: no se puede avisar)", flush=True)
+        return False
+    try:
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", timeout=timeout_http,
+                          data={"chat_id": chat_id, "text": texto})
+        return r.status_code == 200
+    except Exception as e:
+        print(f"(no se pudo avisar a Telegram: {_sin_secretos(repr(e), token, chat_id)})", flush=True)
+        return False
+
+
 def leer_argumentos(argv=None):
     ap = argparse.ArgumentParser(description="Reporte SMC lite (BOOM500)")
     ap.add_argument("--dry-run", action="store_true",
-                    help="no envía a Telegram; guarda PNG y HTML en local")
+                    help="no envía a Telegram; guarda PNG y HTML en local (y usa/crea la caché de velas)")
     ap.add_argument("--capas", default="", help="capas opcionales separadas por coma")
     ap.add_argument("--velas-grafico", type=int, default=400)
     ap.add_argument("--simbolo", default=SIMBOLO)
+    ap.add_argument("--modo-largo", action="store_true",
+                    help="8 reintentos (20 s x intento) y timeout global de 540 s, en vez del perfil de producción")
+    ap.add_argument("--sin-cache", action="store_true",
+                    help="con --dry-run: ignora la caché y vuelve a descargar")
     return ap.parse_args(argv)
 
 
@@ -321,21 +357,34 @@ def configurar_capas(texto):
     return cfg, pedidas
 
 
-async def principal(args):
-    cfg, activas = configurar_capas(args.capas)
-    token = os.getenv("TELEGRAM_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+def perfil_de_red(cfg, args):
+    return cfg["RED_LARGO"] if args.modo_largo else cfg["RED"]
+
+
+async def obtener_datos(args, cfg, red, progreso):
+    """Velas de las 4 temporalidades. Con --dry-run reutiliza la caché (< 1 h) y guarda la descarga."""
+    if args.dry_run and not args.sin_cache:
+        c = cargar_cache(args.simbolo, max_edad_s=cfg["CACHE_MAX_EDAD_S"])
+        if c:
+            print(f"♻️ --dry-run: uso las velas en caché ({c[1] / 60:.0f} min de antigüedad); "
+                  f"--sin-cache fuerza una descarga nueva.")
+            return c[0]
+    datos = await descargar_todo(args.simbolo, red=red, progreso=progreso)
+    if args.dry_run:
+        try:
+            guardar_cache(args.simbolo, datos)
+        except OSError as e:
+            print(f"⚠️ No se pudo guardar la caché: {e!r}")
+    return datos
+
+
+async def principal(args, cfg, activas, red, progreso, token, chat_id):
     if os.getenv("DERIV_TOKEN"):
         print("🕵️ DERIV_TOKEN detectado (el endpoint público no lo necesita).")
     if not args.dry_run and not (token and chat_id):
-        print("❌ Faltan TELEGRAM_TOKEN / TELEGRAM_CHAT_ID (usa --dry-run para probar sin enviar).")
-        sys.exit(1)
+        raise ErrorReporte("faltan TELEGRAM_TOKEN / TELEGRAM_CHAT_ID (usa --dry-run para probar sin enviar)")
 
-    try:
-        datos = await descargar_todo(args.simbolo)
-    except Exception as e:
-        print(f"❌ Error descargando datos de Deriv: {e!r}")
-        sys.exit(1)
+    datos = await obtener_datos(args, cfg, red, progreso)
 
     print("🧠 Calculando estructura, zonas y liquidez...")
     res = smc.analizar(datos, cfg)
@@ -357,20 +406,42 @@ async def principal(args):
         print(f"💾 HTML guardado: {os.path.abspath(ruta_html)}")
     try:
         fig.write_image(ruta_png)
-        print(f"✅ PNG guardado: {os.path.abspath(ruta_png)}")
     except Exception as e:
-        print(f"❌ No se pudo generar el PNG (¿kaleido?): {e!r}")
-        if not args.dry_run:
-            sys.exit(1)
-        return
+        raise ErrorReporte(f"no se pudo generar el PNG (¿kaleido?): {e!r}") from e
+    print(f"✅ PNG guardado: {os.path.abspath(ruta_png)}")
 
     if args.dry_run:
         print("🧪 --dry-run: no se envía nada a Telegram.")
         return
     print("📲 Enviando a Telegram...")
     if not enviar_telegram(token, chat_id, ruta_png, mensaje):
-        sys.exit(1)
+        raise ErrorReporte("Telegram rechazó el envío del reporte (revisa token y chat)")
     print("✅ Enviado.")
+
+
+def correr(args, timeout=None):
+    """Ejecuta el reporte. Devuelve el código de salida: 0 = ok; 1 = falló (y se avisó a Telegram)."""
+    cfg, activas = configurar_capas(args.capas)
+    red = perfil_de_red(cfg, args)
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    progreso = {}
+    limite = timeout if timeout is not None else red["TIMEOUT_GLOBAL_S"] - red["MARGEN_TIMEOUT_S"]
+    try:
+        asyncio.run(asyncio.wait_for(
+            principal(args, cfg, activas, red, progreso, token, chat_id), timeout=limite))
+        return 0
+    except ErrorReporte as e:
+        motivo = str(e)
+    except ErrorDescarga as e:
+        motivo = f"no se pudo descargar {e.tf} de Deriv: {e.causa!r}"
+    except asyncio.TimeoutError:
+        tf = progreso.get("tf_actual")
+        motivo = f"timeout de {limite:.0f}s" + (f" mientras descargaba {tf}" if tf else "")
+    except Exception as e:
+        motivo = f"error inesperado ({type(e).__name__}): {e}"
+    notificar_error(motivo, token, chat_id, args.dry_run)
+    return 1
 
 
 if __name__ == "__main__":
@@ -380,18 +451,17 @@ if __name__ == "__main__":
         except Exception:
             pass
     argumentos = leer_argumentos()
+    _red = perfil_de_red(smc.CONFIG, argumentos)
 
     def _matar_por_cuelgue():
         # Último recurso: si el bucle de eventos queda bloqueado (p. ej. un cierre de websocket que no
         # responde a la cancelación), ni wait_for ni asyncio.run terminan. Esto garantiza el fin del proceso.
-        print(f"❌ Watchdog: el proceso no terminó a tiempo ({WATCHDOG_S}s). Abortando.", flush=True)
+        if not _AVISADO.is_set():
+            notificar_error(f"el proceso no terminó en {_red['TIMEOUT_GLOBAL_S']}s (watchdog)",
+                            os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHAT_ID"), argumentos.dry_run)
         os._exit(1)
 
-    vigilante = threading.Timer(WATCHDOG_S, _matar_por_cuelgue)
+    vigilante = threading.Timer(_red["TIMEOUT_GLOBAL_S"], _matar_por_cuelgue)
     vigilante.daemon = True
     vigilante.start()
-    try:
-        asyncio.run(asyncio.wait_for(principal(argumentos), timeout=TIMEOUT_GLOBAL_S))
-    except asyncio.TimeoutError:
-        print(f"❌ Timeout global de {TIMEOUT_GLOBAL_S}s.")
-        sys.exit(1)
+    sys.exit(correr(argumentos))

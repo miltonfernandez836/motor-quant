@@ -6,7 +6,7 @@ on:
 jobs:
   ejecutar-reporte-smc:
     runs-on: ubuntu-latest
-    timeout-minutes: 10 # Seguro anti-zombies
+    timeout-minutes: 5 # Seguro anti-zombies (el script se corta solo a los 180 s)
 
     steps:
     - name: Clonar el código
