@@ -50,10 +50,10 @@ def test_modo_largo_conserva_los_8_reintentos():
     assert rep.perfil_de_red(smc.CONFIG, rep.leer_argumentos([])) is smc.CONFIG["RED"]
 
 
-def test_workflow_con_timeout_de_5_minutos_y_mismas_librerias_que_bot_diario():
+def test_workflow_con_timeouts_y_mismas_librerias_que_bot_diario():
     smc_yml = open(os.path.join(RAIZ, ".github", "workflows", "bot_smc.yml"), encoding="utf-8").read()
     diario = open(os.path.join(RAIZ, ".github", "workflows", "bot_diario.yml"), encoding="utf-8").read()
-    assert "timeout-minutes: 5" in smc_yml
+    assert "timeout-minutes: 15" in smc_yml and smc_yml.count("timeout-minutes: 4") == 3   # job y un paso por activo
     linea = 'pip install websockets pandas numpy "plotly<6" requests kaleido==0.2.1'
     assert linea in smc_yml and linea in diario
     assert "schedule:" not in smc_yml

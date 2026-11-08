@@ -55,14 +55,16 @@ CONFIG = {
         "BOOM1000": {"codigo": "BOOM1000", "nombre": "BOOM 1000",     "png": "reporte_smc_BOOM1000.png", "html": "reporte_smc_BOOM1000.html", "cache": "BOOM1000"},
         "V75":      {"codigo": "R_75",     "nombre": "Volatility 75", "png": "reporte_smc_V75.png",      "html": "reporte_smc_V75.html",      "cache": "V75"},
     },
-    # --- Capas opcionales (Fase 2/3; lógica aún no implementada) ---
+    # --- Capas opcionales: solo dibujo (no cambian R1-R4, puntaje, selección de zonas ni el mensaje) ---
+    "FVG_MIN_ATR": 0.3,               # capa fvg: tamaño mínimo del hueco, en ATR
+    "CAPA_MAX_ELEMENTOS": 4,          # máximo de elementos por capa (los más cercanos al precio)
     "CAPAS": {
-        "fvg_ifc": False,             # Fase 2
-        "eqh_eql_lineas": False,      # Fase 2
-        "irl_erl_lineas": False,      # Fase 2
-        "albercas_d1": False,         # Fase 2
-        "inducement": False,          # Fase 2
-        "smt": False,                 # Fase 2
+        "fvg": False,                 # Fase 2: FVG + IFC
+        "eqhl": False,                # Fase 2: líneas EQH/EQL
+        "irl_erl": False,             # Fase 2: líneas IRL / ERL
+        "albercas": False,            # Fase 2: máx/mín del D1 y W1 previos
+        "inducement": False,          # Fase 2: LG de un pivote IRL (mediano / mayor)
+        "smt": False,                 # Fase 2: zona M15 contra el sesgo H1 dentro de un POI H1 opuesto
         "trendline_liquidez": False,  # Fase 3
         "wick_poi": False,            # Fase 3
         "fvg_breaker": False,         # Fase 3
@@ -581,3 +583,177 @@ def zonas_fuera_de_rango(res, precio, y_min, y_max, tfs=("H4", "H1"), k=None):
                           "alto": z["alto"], "arriba": arriba,
                           "dist_pct": (borde - precio) / precio * 100.0})
     return sorted(fuera, key=lambda f: abs(f["dist_pct"]))[:k]
+
+
+# =====================================================================
+# Capas opcionales de la Fase 2 (SOLO DIBUJO)
+# calcular_capas devuelve todos los elementos con su 'conocido_en' (anti-futuro: nada usa velas > t
+# para existir; el estado -fresca/parcial/rellena, barrido- es el de la última vela);
+# seleccionar_capa elige los vigentes visibles y más cercanos al precio.
+# =====================================================================
+MINUTOS_TF = {"M15": 15, "H1": 60, "H4": 240}
+
+
+def capa_fvg(df, atr, min_atr):
+    """FVG: alcista si low[t] > high[t-2]; bajista si high[t] < low[t-2]. IFC = la vela t-2 que lo abre."""
+    h = df["high"].to_numpy(float)
+    l = df["low"].to_numpy(float)
+    N = len(h)
+    out = []
+    for t in range(2, N):
+        if l[t] > h[t - 2]:
+            d, lo, hi = 1, h[t - 2], l[t]
+        elif h[t] < l[t - 2]:
+            d, lo, hi = -1, h[t], l[t - 2]
+        else:
+            continue
+        if hi - lo < min_atr * atr[t]:
+            continue
+        if t + 1 < N:   # relleno: cuánto del hueco recorrió el precio después
+            prof = (hi - l[t + 1:].min()) if d == 1 else (h[t + 1:].max() - lo)
+        else:
+            prof = 0.0
+        pct = float(min(max(prof / (hi - lo), 0.0), 1.0))
+        out.append({"dir": d, "idx": t, "idx_ifc": t - 2, "bajo": float(lo), "alto": float(hi),
+                    "pct_relleno": pct, "conocido_en": t,
+                    "estado": "fresca" if pct <= 0 else ("rellena" if pct >= 1 else "parcial")})
+    return out
+
+
+def capa_eqhl(res):
+    """EQH/EQL: dos pivotes confirmados a <= EQ_TOL_ATR (ya detectados en 'eqs'); línea desde el primero."""
+    return [{"tipo": e["tipo"], "idx1": e["idx1"], "idx2": e["idx2"], "bajo": e["precio"], "alto": e["precio"],
+             "conocido_en": e["conocido_en"]} for e in res["eqs"]]
+
+
+def capa_irl_erl(res, df):
+    """IRL = pivotes n=2 dentro del TR de trabajo; ERL = extremos del TR y strong/weak fuera de él.
+    'sin_barrer' indica si alguna mecha posterior ya superó el nivel."""
+    tr = res["tr_trabajo"]
+    if tr is None:
+        return []
+    h = df["high"].to_numpy(float)
+    l = df["low"].to_numpy(float)
+    out = []
+    for i in res["irls"]:
+        if i["idx"] >= tr["idx_ini"] and tr["bajo"] < i["precio"] < tr["alto"]:
+            out.append({"clase": "IRL", "tipo": i["tipo"], "idx": i["idx"], "bajo": i["precio"], "alto": i["precio"],
+                        "conocido_en": i["conocido_en"],
+                        "sin_barrer": _sin_barrer(i["precio"], i["idx"], i["tipo"], h, l)})
+    for pt in res["puntos"]:
+        if not (tr["bajo"] < pt["precio"] < tr["alto"]):
+            tipo = "alto" if pt["tipo"].endswith("high") else "bajo"
+            out.append({"clase": "ERL", "tipo": tipo, "idx": pt["idx"], "bajo": pt["precio"], "alto": pt["precio"],
+                        "conocido_en": pt["conocido_en"], "nombre": pt["tipo"],
+                        "sin_barrer": _sin_barrer(pt["precio"], pt["idx"], tipo, h, l)})
+    return out
+
+
+def capa_albercas(df15, d1):
+    """Máx/mín del D1 previo y de la W1 previa (derivada de D1) y si el precio ya los barrió."""
+    if d1 is None or len(d1) == 0:
+        return []
+    dias = d1.index.normalize()
+    hoy = df15.index[-1].normalize()
+    h = df15["high"].to_numpy(float)
+    l = df15["low"].to_numpy(float)
+    dias15 = df15.index.normalize()
+    out = []
+
+    def agregar(nombre, nivel, tipo, desde):
+        idx = int(np.argmax(np.asarray(dias15 >= desde)))
+        barrido = bool((h[idx:].max() > nivel) if tipo == "alto" else (l[idx:].min() < nivel))
+        out.append({"nombre": nombre, "tipo": tipo, "bajo": float(nivel), "alto": float(nivel),
+                    "barrido": barrido, "idx_desde": idx, "conocido_en": idx})
+
+    previos = d1[dias < hoy]
+    if len(previos):
+        agregar("PDH", previos["high"].iloc[-1], "alto", hoy)
+        agregar("PDL", previos["low"].iloc[-1], "bajo", hoy)
+    lunes = hoy - pd.Timedelta(days=int(hoy.weekday()))
+    semana = d1[(dias < lunes) & (dias >= lunes - pd.Timedelta(days=7))]
+    if len(semana):
+        agregar("PWH", semana["high"].max(), "alto", lunes)
+        agregar("PWL", semana["low"].min(), "bajo", lunes)
+    return out
+
+
+def capa_inducement(res, df15):
+    """LG (mecha fuera, cierra dentro) de un pivote IRL (n=2). 'mediano' si el pivote es de M15-H1,
+    'mayor' si es de H4. No existe 'menor' (no hay datos M1-M10)."""
+    idx15 = df15.index
+    h = df15["high"].to_numpy(float)
+    l = df15["low"].to_numpy(float)
+    c = df15["close"].to_numpy(float)
+    N = len(h)
+    out = []
+    for tf, clase in (("M15", "mediano"), ("H1", "mediano"), ("H4", "mayor")):
+        if tf not in res:
+            continue
+        r = res[tf]
+        for p in r["irls"]:
+            conocido = r["index"][p["conocido_en"]] + pd.Timedelta(minutes=MINUTOS_TF[tf])   # cierre de esa vela
+            j0 = int(idx15.searchsorted(conocido))
+            if j0 >= N:
+                continue
+            nivel = p["precio"]
+            rotos = np.nonzero((h[j0:] > nivel) if p["tipo"] == "alto" else (l[j0:] < nivel))[0]
+            if not len(rotos):
+                continue
+            j = j0 + int(rotos[0])
+            if (c[j] <= nivel) if p["tipo"] == "alto" else (c[j] >= nivel):   # cierra dentro: LG
+                out.append({"tf": tf, "clase": clase, "tipo": p["tipo"], "bajo": float(nivel), "alto": float(nivel),
+                            "t_pivote": r["index"][p["idx"]], "idx_lg": j, "idx_vis": j, "conocido_en": j})
+    return out
+
+
+def capa_smt(res, precio):
+    """Zona M15 viva contra el sesgo H1 y totalmente dentro de un POI H1 vivo de dirección opuesta."""
+    if "H1" not in res:
+        return []
+    pois = candidatas(res["H1"], precio, k=10**6)
+    out = []
+    for z in candidatas(res["M15"], precio, k=10**6):
+        if "H1" not in z["contra"]:
+            continue
+        for p in pois:
+            if p["signo"] == -z["signo"] and z["bajo"] >= p["bajo"] and z["alto"] <= p["alto"]:
+                out.append({"id": z["id"], "poi_h1": p["id"], "bajo": z["bajo"], "alto": z["alto"],
+                            "conocido_en": z["idx_creacion"]})
+                break
+    return out
+
+
+def calcular_capas(res, dfs, activas, cfg=None):
+    """Elementos de las capas de la Fase 2 pedidas en 'activas' (set de claves de CONFIG["CAPAS"])."""
+    cfg = {**CONFIG, **(cfg or {})}
+    m15, df15 = res["M15"], dfs["M15"]
+    precio = float(df15["close"].iloc[-1])
+    capas = {}
+    if "fvg" in activas:
+        capas["fvg"] = capa_fvg(df15, m15["atr"], cfg["FVG_MIN_ATR"])
+    if "eqhl" in activas:
+        capas["eqhl"] = capa_eqhl(m15)
+    if "irl_erl" in activas:
+        capas["irl_erl"] = capa_irl_erl(m15, df15)
+    if "albercas" in activas:
+        capas["albercas"] = capa_albercas(df15, dfs.get("D1"))
+    if "inducement" in activas:
+        capas["inducement"] = capa_inducement(res, df15)
+    if "smt" in activas:
+        capas["smt"] = capa_smt(res, precio)
+    return capas
+
+
+def seleccionar_capa(elementos, precio, y_min, y_max, desde_idx=0, k=None):
+    """Vigentes (FVG no rellenado, IRL/ERL sin barrer), visibles en el eje y en la ventana, y los k más
+    cercanos al precio."""
+    k = k or CONFIG["CAPA_MAX_ELEMENTOS"]
+
+    def vigente(e):
+        return (e.get("estado") != "rellena" and e.get("sin_barrer", True)
+                and e["alto"] >= y_min and e["bajo"] <= y_max and e.get("idx_vis", desde_idx) >= desde_idx)
+
+    def dist(e):
+        return 0.0 if e["bajo"] <= precio <= e["alto"] else min(abs(precio - e["alto"]), abs(precio - e["bajo"]))
+    return sorted([e for e in elementos if vigente(e)], key=dist)[:k]

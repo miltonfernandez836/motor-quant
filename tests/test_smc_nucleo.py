@@ -386,13 +386,76 @@ CORTES_ANTI_FUTURO = range(120, 900, 7)      # muchos cortes: una mirada corta a
                                              # contamina lo confirmado justo antes de t
 
 
+AG = {"open": "first", "high": "max", "low": "min", "close": "last"}
+CAMPOS_CAPAS = {"fvg": ("dir", "idx", "idx_ifc", "bajo", "alto", "conocido_en"),
+                "eqhl": ("tipo", "idx1", "idx2", "bajo", "conocido_en"),
+                "inducement": ("tf", "clase", "tipo", "bajo", "t_pivote", "idx_lg", "conocido_en")}
+
+
+def _dfs_completos(df):
+    """M15 + H1/H4/D1 derivadas, descartando la vela superior aún sin cerrar (como en producción)."""
+    dfs = {"M15": df}
+    for tf, regla in (("H1", "1h"), ("H4", "4h"), ("D1", "1D")):
+        r = df.resample(regla).agg(AG).dropna()
+        if df.index[-1] + pd.Timedelta(minutes=15) < r.index[-1] + pd.Timedelta(regla):
+            r = r.iloc[:-1]
+        dfs[tf] = r
+    return dfs
+
+
+def _capas(df):
+    dfs = _dfs_completos(df)
+    return smc.calcular_capas(smc.analizar(dfs), dfs, set(smc.CONFIG["CAPAS"]) & CAPAS_FASE2)
+
+
+CAPAS_FASE2 = {"fvg", "eqhl", "irl_erl", "albercas", "inducement", "smt"}
+
+
+def _foto_capas(capas, t):
+    """Elementos estáticos de las capas conocidos en t (el estado fresca/parcial/barrido evoluciona)."""
+    return {k: [tuple(e[c] for c in campos) for e in capas[k] if e["conocido_en"] <= t]
+            for k, campos in CAMPOS_CAPAS.items()}
+
+
+def _oraculo_albercas(df):
+    """PDH/PDL/PWH/PWL y su barrido calculados a mano solo con velas M15 hasta la última."""
+    hoy = df.index[-1].normalize()
+    dias = df.index.normalize()
+    esperado = {}
+    ayer = df[dias == hoy - pd.Timedelta(days=1)]
+    hoy_df = df[dias >= hoy]
+    if len(ayer):
+        esperado["PDH"] = (ayer["high"].max(), bool(hoy_df["high"].max() > ayer["high"].max()))
+        esperado["PDL"] = (ayer["low"].min(), bool(hoy_df["low"].min() < ayer["low"].min()))
+    lunes = hoy - pd.Timedelta(days=int(hoy.weekday()))
+    sem = df[(dias < lunes) & (dias >= lunes - pd.Timedelta(days=7))]
+    desde_lunes = df[dias >= lunes]
+    if len(sem):
+        esperado["PWH"] = (sem["high"].max(), bool(desde_lunes["high"].max() > sem["high"].max()))
+        esperado["PWL"] = (sem["low"].min(), bool(desde_lunes["low"].min() < sem["low"].min()))
+    return esperado
+
+
 def test_anti_futuro_datos_hasta_t_igual_a_datos_completos():
     df = serie_aleatoria()
     completo = smc.detectar(df, "M15")
     assert len(completo["zonas"]) > 5                      # la serie sí genera zonas
+    capas_completas = _capas(df)
+    assert all(len(capas_completas[k]) > 0 for k in ("fvg", "eqhl", "inducement"))   # las capas sí tienen datos
     for t in CORTES_ANTI_FUTURO:
         parcial = smc.detectar(df.iloc[:t + 1], "M15")
         assert _foto(parcial, t) == _foto(completo, t), f"difiere en t={t}"
+        # capas de la Fase 2: lo conocido en t coincide con el cálculo sobre datos completos
+        capas_parciales = _capas(df.iloc[:t + 1])
+        assert _foto_capas(capas_parciales, t) == _foto_capas(capas_completas, t), f"capas difieren en t={t}"
+        # y ningún elemento (incluidos irl_erl y smt, que dependen de "hoy") nace después de t
+        assert all(e["conocido_en"] <= t for v in capas_parciales.values() for e in v), f"capa del futuro en t={t}"
+        # albercas D1/W1: iguales a un cálculo a mano con velas <= t (no pueden mirar días posteriores)
+        esperado = _oraculo_albercas(df.iloc[:t + 1])
+        obtenido = {e["nombre"]: (e["alto"], e["barrido"]) for e in capas_parciales["albercas"]}
+        assert obtenido.keys() == esperado.keys(), f"albercas difieren en t={t}"
+        for nombre, (nivel, barrido) in esperado.items():
+            assert obtenido[nombre][0] == pytest.approx(nivel) and obtenido[nombre][1] == barrido, f"{nombre} en t={t}"
 
 
 def test_anti_futuro_alterar_el_futuro_no_cambia_el_pasado():

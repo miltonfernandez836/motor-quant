@@ -5,7 +5,7 @@ y no guarda datos. Variables de entorno: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, DERIV
 
 Uso:
     python reporte_smc.py --dry-run                      # no envía; guarda PNG y HTML
-    python reporte_smc.py --dry-run --capas fvg_ifc,smt  # capas opcionales (Fase 2/3)
+    python reporte_smc.py --dry-run --capas fvg,eqhl     # capas opcionales (también: variable SMC_CAPAS)
     python reporte_smc.py --velas-grafico 400
 """
 import argparse
@@ -29,7 +29,11 @@ FIN_MENSAJE = "No es señal de entrada."
 VELA_S = 900
 
 # Capas opcionales cuya lógica ya está implementada (Fase 1: ninguna)
-CAPAS_IMPLEMENTADAS = set()
+CAPAS_IMPLEMENTADAS = {"fvg", "eqhl", "irl_erl", "albercas", "inducement", "smt"}   # Fase 2 (apagadas por defecto)
+NOMBRE_CAPA = {"fvg": "FVG + IFC", "eqhl": "EQH/EQL", "irl_erl": "IRL / ERL", "albercas": "Albercas D1/W1",
+               "inducement": "Inducement", "smt": "SMT"}
+COLOR_CAPA = {"fvg": "#4fc3f7", "eqhl": "#ffcc80", "irl_erl": "#4dd0e1", "albercas": "#aed581",
+              "inducement": "#f48fb1", "smt": "#ffeb3b"}
 
 COLOR = {  # (relleno, borde)
     "COMPRA": ("rgba(38,166,154,0.22)", "rgba(38,166,154,0.95)"),
@@ -150,7 +154,7 @@ def rango_eje_y(df15, n_velas, cands=()):
     return [ymin - pad, ymax + pad]
 
 
-def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE_ACTIVO):
+def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE_ACTIVO, extra=None):
     m15 = res["M15"]
     index = m15["index"]
     n_tot = len(index)
@@ -284,9 +288,11 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE
                     textposition="top left" if cerca_borde else "top right",
                     textfont=dict(size=12, color="white"))
 
-    # --- Capas opcionales (Fase 2/3): se agregan aquí cuando tengan lógica
-    for nombre in sorted(activas & CAPAS_IMPLEMENTADAS):
-        capas.registrar(nombre, "#4fc3f7")
+    # --- Capas opcionales de la Fase 2 (apagadas por defecto; solo dibujo). 'extra' = elementos ya elegidos
+    extra = extra or {}
+    for clave in [c for c in NOMBRE_CAPA if c in activas]:
+        capas.registrar(NOMBRE_CAPA[clave], COLOR_CAPA[clave])
+    _dibujar_capas(capas, df15, index, i0, x_izq, x_der, extra, cands)
 
     fig.update_layout(
         title=f"{nombre} M15 | {encabezado_sesgo(res)}",
@@ -295,6 +301,71 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE
         legend=dict(orientation="h", y=1.07, x=0, groupclick="togglegroup"),
         xaxis=dict(range=[x_izq, x_der]), yaxis=dict(range=rango_y))
     return fig
+
+
+def _dibujar_capas(capas, df15, index, i0, x_izq, x_der, extra, cands):
+    """Dibuja las capas de la Fase 2 que vengan en 'extra' (cada una es un grupo de leyenda)."""
+    def x_desde(i):
+        return _x(index, max(i, i0))
+
+    for e in extra.get("fvg", []):
+        g, col = NOMBRE_CAPA["fvg"], COLOR_CAPA["fvg"]
+        relleno = "rgba(79,195,247,0.16)" if e["dir"] == 1 else "rgba(255,171,145,0.16)"
+        borde = col if e["dir"] == 1 else "#ffab91"
+        xr, yr = _rect(x_desde(e["idx_ifc"]), x_der, e["bajo"], e["alto"])
+        capas.trazo(g, x=xr, y=yr, mode="lines", fill="toself", fillcolor=relleno, line=dict(color=borde, width=0.8))
+        capas.trazo(g, x=[x_der], y=[e["alto"]], mode="text", textposition="top left", cliponaxis=False,
+                    text=[f"FVG {'↑' if e['dir'] == 1 else '↓'} {e['estado']} {e['pct_relleno'] * 100:.0f}%"],
+                    textfont=dict(size=9, color=borde))
+        if e["idx_ifc"] >= i0:   # IFC: la vela t-2 que abre el hueco
+            ob = [n for n, z in enumerate(cands, 1) if z["idx_ob"] == e["idx_ifc"]]
+            texto = f"IFC = OB {ob[0]}" if ob else "IFC"
+            if ob:
+                print(f"ℹ️ El IFC de un FVG ({_x(index, e['idx_ifc'])}) coincide con el OB {ob[0]} dibujado.")
+            alcista = e["dir"] == 1
+            capas.trazo(g, x=[_x(index, e["idx_ifc"])], y=[float(df15["low" if alcista else "high"].iloc[e["idx_ifc"]])],
+                        mode="markers+text", text=[texto], textposition="bottom center" if alcista else "top center",
+                        marker=dict(symbol="circle-open", size=9, color=borde), textfont=dict(size=9, color=borde),
+                        cliponaxis=False)
+
+    for e in extra.get("eqhl", []):
+        g, col = NOMBRE_CAPA["eqhl"], COLOR_CAPA["eqhl"]
+        capas.trazo(g, x=[x_desde(e["idx1"]), x_der], y=[e["alto"], e["alto"]], mode="lines+text",
+                    text=["", f"{e['tipo']} {e['alto']:.0f}"], textposition="top left", cliponaxis=False,
+                    line=dict(color=col, width=1, dash="dot"), textfont=dict(size=9, color=col))
+
+    for e in extra.get("irl_erl", []):
+        g = NOMBRE_CAPA["irl_erl"]
+        irl = e["clase"] == "IRL"
+        col = "#4dd0e1" if irl else "#e0e0e0"
+        capas.trazo(g, x=[x_desde(e["idx"]), x_der], y=[e["alto"], e["alto"]], mode="lines+text",
+                    text=["", f"{e['clase']} {e['alto']:.0f}"], textposition="top left", cliponaxis=False,
+                    line=dict(color=col, width=0.8 if irl else 1.2, dash="dot" if irl else "dash"),
+                    textfont=dict(size=9, color=col))
+
+    for e in extra.get("albercas", []):
+        g, col = NOMBRE_CAPA["albercas"], COLOR_CAPA["albercas"]
+        capas.trazo(g, x=[x_desde(e["idx_desde"]), x_der], y=[e["alto"], e["alto"]], mode="lines+text",
+                    text=["", f"{e['nombre']} {e['alto']:.0f} ({'barrido' if e['barrido'] else 'sin barrer'})"],
+                    textposition="top left", cliponaxis=False,
+                    line=dict(color=col, width=1.2, dash="dash"), textfont=dict(size=9, color=col))
+
+    for e in extra.get("inducement", []):
+        g, col = NOMBRE_CAPA["inducement"], COLOR_CAPA["inducement"]
+        x_piv = max(e["t_pivote"].strftime("%Y-%m-%d %H:%M:%S"), x_izq)
+        capas.trazo(g, x=[x_piv, _x(index, e["idx_lg"])], y=[e["alto"], e["alto"]], mode="lines",
+                    line=dict(color=col, width=0.8, dash="dot"))
+        capas.trazo(g, x=[_x(index, e["idx_lg"])], y=[e["alto"]], mode="markers+text",
+                    text=[f"Inducement {e['clase']}"], textposition="top center" if e["tipo"] == "alto" else "bottom center",
+                    marker=dict(symbol="x", size=9, color=col), textfont=dict(size=9, color=col), cliponaxis=False)
+
+    for e in extra.get("smt", []):
+        g, col = NOMBRE_CAPA["smt"], COLOR_CAPA["smt"]
+        z = next((z for z in cands if z["id"] == e["id"]), None)
+        if z is not None:
+            capas.trazo(g, x=[x_desde(z["idx_ob"])], y=[z["bajo"]], mode="markers+text", text=["SMT"],
+                        textposition="bottom right", marker=dict(symbol="star", size=11, color=col),
+                        textfont=dict(size=10, color=col), cliponaxis=False)
 
 
 # =====================================================================
@@ -363,13 +434,20 @@ def leer_argumentos(argv=None):
     return ap.parse_args(argv)
 
 
-def configurar_capas(texto):
+def configurar_capas(texto, texto_entorno=""):
+    """Capas pedidas por --capas (texto) y por la variable SMC_CAPAS (texto_entorno), misma sintaxis
+    'a,b'. Una capa desconocida en --capas es un error; en la variable solo se avisa y se ignora
+    (un error de tipeo en la variable de GitHub no debe tumbar el reporte)."""
     cfg = copy.deepcopy(smc.CONFIG)
     pedidas = {c.strip() for c in texto.split(",") if c.strip()}
     desconocidas = pedidas - set(cfg["CAPAS"])
     if desconocidas:
         print(f"❌ Capas desconocidas: {sorted(desconocidas)}. Disponibles: {sorted(cfg['CAPAS'])}")
         sys.exit(2)
+    del_entorno = {c.strip() for c in texto_entorno.split(",") if c.strip()}
+    if del_entorno - set(cfg["CAPAS"]):
+        print(f"⚠️ SMC_CAPAS tiene capas desconocidas, se ignoran: {sorted(del_entorno - set(cfg['CAPAS']))}")
+    pedidas |= del_entorno & set(cfg["CAPAS"])
     for c in pedidas:
         cfg["CAPAS"][c] = True
         if c not in CAPAS_IMPLEMENTADAS:
@@ -442,7 +520,16 @@ async def principal(args, cfg, activas, red, progreso, token, chat_id):
     print(f"(precio actual {precio:.2f} | zonas M15 totales {len(res['M15']['zonas'])} | "
           f"candidatas {len(cands)} | H1/H4 fuera del eje {len(fuera)})")
 
-    fig = construir_figura(df15, res, cands, args.velas_grafico, activas, fuera, activo_nombre)
+    extra = {}
+    if activas & CAPAS_IMPLEMENTADAS:   # capas de la Fase 2: solo dibujo, no tocan fichas ni mensaje
+        crudo = smc.calcular_capas(res, datos, activas & CAPAS_IMPLEMENTADAS, cfg)
+        ids_dibujadas = {z["id"] for z in cands}
+        crudo["smt"] = [e for e in crudo.get("smt", []) if e["id"] in ids_dibujadas]
+        desde = max(0, len(df15) - args.velas_grafico)
+        extra = {k: smc.seleccionar_capa(v, precio, y_min, y_max, desde, cfg["CAPA_MAX_ELEMENTOS"])
+                 for k, v in crudo.items()}
+        print("🧩 Capas activas: " + ", ".join(f"{NOMBRE_CAPA[k]} ({len(v)})" for k, v in extra.items()))
+    fig = construir_figura(df15, res, cands, args.velas_grafico, activas, fuera, activo_nombre, extra)
     ruta_png = activo["png"]
     if args.dry_run:
         ruta_html = activo["html"]
@@ -462,7 +549,7 @@ async def principal(args, cfg, activas, red, progreso, token, chat_id):
 
 def correr(args, timeout=None):
     """Ejecuta el reporte. Devuelve el código de salida: 0 = ok; 1 = falló (y se avisó a Telegram)."""
-    cfg, activas = configurar_capas(args.capas)
+    cfg, activas = configurar_capas(args.capas, os.getenv("SMC_CAPAS", ""))
     red = perfil_de_red(cfg, args)
     token = os.getenv("TELEGRAM_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
