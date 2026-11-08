@@ -1,4 +1,4 @@
-"""Reporte SMC "lite" para BOOM500: zonas vivas como fichas + gráfico M15 + Telegram.
+"""Reporte SMC "lite" (BOOM500, BOOM1000, V75 con --simbolo): zonas vivas como fichas + gráfico M15 + Telegram.
 
 Cada corrida baja una ventana corta (datos_smc), recalcula todo desde cero (smc_nucleo)
 y no guarda datos. Variables de entorno: TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, DERIV_TOKEN.
@@ -23,7 +23,7 @@ import smc_nucleo as smc
 from datos_smc import ErrorDescarga, cargar_cache, descargar_todo, guardar_cache
 
 SIMBOLO = "BOOM500"
-NOMBRE_ACTIVO = "BOOM 500"
+NOMBRE_ACTIVO = smc.CONFIG["ACTIVOS"][SIMBOLO]["nombre"]   # nombre por defecto de las funciones de presentación
 LIMITE_CAPTION = 1024           # máximo de texto de una foto en Telegram
 FIN_MENSAJE = "No es señal de entrada."
 VELA_S = 900
@@ -79,12 +79,12 @@ def linea_fuera(fuera):
     return "Fuera del gráfico: " + " · ".join(partes)
 
 
-def armar_mensaje(res, cands, precio, hora, fuera=()):
+def armar_mensaje(res, cands, precio, hora, fuera=(), nombre=NOMBRE_ACTIVO):
     """Texto del caption. 'cands' ya viene en el orden de numeración (el mismo del gráfico):
     COMPRA primero y luego VENTA, cada una por cercanía. Si pasa de 1024 caracteres se recorta
     primero la línea de zonas fuera del gráfico; las fichas nunca se recortan."""
     sesgo = lambda tf: FLECHA.get(res[tf]["sesgo"], "↔")
-    cab = [f"📊 {NOMBRE_ACTIVO} M15 · {hora.day} {MESES[hora.month - 1]} {hora:%H:%M} · Precio {precio:.0f}",
+    cab = [f"📊 {nombre} M15 · {hora.day} {MESES[hora.month - 1]} {hora:%H:%M} · Precio {precio:.0f}",
            f"Sesgo: H4 {sesgo('H4')} · H1 {sesgo('H1')}"]
     bloques = []
     for dir_, icono in (("COMPRA", "🟢"), ("VENTA", "🔴")):
@@ -148,7 +148,7 @@ def rango_eje_y(df15, n_velas):
     return [ymin - pad, ymax + pad]
 
 
-def construir_figura(df15, res, cands, n_velas, activas, fuera=()):
+def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE_ACTIVO):
     m15 = res["M15"]
     index = m15["index"]
     n_tot = len(index)
@@ -162,7 +162,7 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=()):
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
         x=xs, open=vis["open"], high=vis["high"], low=vis["low"], close=vis["close"],
-        name=NOMBRE_ACTIVO, showlegend=False,
+        name=nombre, showlegend=False,
         increasing_line_color="#26a69a", decreasing_line_color="#ef5350"))
     capas = Capas(fig)
 
@@ -271,7 +271,7 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=()):
         capas.registrar(nombre, "#4fc3f7")
 
     fig.update_layout(
-        title=f"{NOMBRE_ACTIVO} M15 | {encabezado_sesgo(res)}",
+        title=f"{nombre} M15 | {encabezado_sesgo(res)}",
         template="plotly_dark", width=1400, height=800, xaxis_rangeslider_visible=False,
         margin=dict(l=50, r=30, t=90, b=40),
         legend=dict(orientation="h", y=1.07, x=0, groupclick="togglegroup"),
@@ -310,10 +310,10 @@ def _sin_secretos(texto, *secretos):
     return texto
 
 
-def notificar_error(motivo, token, chat_id, dry_run=False, timeout_http=10):
+def notificar_error(motivo, token, chat_id, dry_run=False, timeout_http=10, nombre=NOMBRE_ACTIVO):
     """Mensaje corto a Telegram con el motivo del fallo (mejor esfuerzo). True si se envió."""
     _AVISADO.set()
-    texto = f"⚠️ Reporte SMC {NOMBRE_ACTIVO} falló: {_sin_secretos(str(motivo), token, chat_id)}"[:400]
+    texto = f"⚠️ Reporte SMC {nombre} falló: {_sin_secretos(str(motivo), token, chat_id)}"[:400]
     print(texto, flush=True)
     if dry_run:
         print("(--dry-run: no se avisa a Telegram)", flush=True)
@@ -331,12 +331,13 @@ def notificar_error(motivo, token, chat_id, dry_run=False, timeout_http=10):
 
 
 def leer_argumentos(argv=None):
-    ap = argparse.ArgumentParser(description="Reporte SMC lite (BOOM500)")
+    ap = argparse.ArgumentParser(description="Reporte SMC lite")
     ap.add_argument("--dry-run", action="store_true",
                     help="no envía a Telegram; guarda PNG y HTML en local (y usa/crea la caché de velas)")
     ap.add_argument("--capas", default="", help="capas opcionales separadas por coma")
     ap.add_argument("--velas-grafico", type=int, default=400)
-    ap.add_argument("--simbolo", default=SIMBOLO)
+    ap.add_argument("--simbolo", default=SIMBOLO, choices=list(smc.CONFIG["ACTIVOS"]),
+                    help="activo de CONFIG[\"ACTIVOS\"] (por defecto BOOM500)")
     ap.add_argument("--modo-largo", action="store_true",
                     help="8 reintentos (20 s x intento) y timeout global de 540 s, en vez del perfil de producción")
     ap.add_argument("--sin-cache", action="store_true",
@@ -384,15 +385,16 @@ def perfil_de_red(cfg, args):
 async def obtener_datos(args, cfg, red, progreso):
     """Velas de las 4 temporalidades. Con --dry-run reutiliza la caché (< 1 h) y guarda la descarga."""
     if args.dry_run and not args.sin_cache:
-        c = cargar_cache(args.simbolo, max_edad_s=cfg["CACHE_MAX_EDAD_S"])
+        c = cargar_cache(cfg["ACTIVOS"][args.simbolo]["cache"], max_edad_s=cfg["CACHE_MAX_EDAD_S"])
         if c:
             print(f"♻️ --dry-run: uso las velas en caché ({c[1] / 60:.0f} min de antigüedad); "
                   f"--sin-cache fuerza una descarga nueva.")
             return c[0]
-    datos = await descargar_todo(args.simbolo, red=red, progreso=progreso)
+    activo = cfg["ACTIVOS"][args.simbolo]
+    datos = await descargar_todo(activo["codigo"], red=red, progreso=progreso)
     if args.dry_run:
         try:
-            guardar_cache(args.simbolo, datos)
+            guardar_cache(activo["cache"], datos)
         except OSError as e:
             print(f"⚠️ No se pudo guardar la caché: {e!r}")
     return datos
@@ -404,6 +406,8 @@ async def principal(args, cfg, activas, red, progreso, token, chat_id):
     if not args.dry_run and not (token and chat_id):
         raise ErrorReporte("faltan TELEGRAM_TOKEN / TELEGRAM_CHAT_ID (usa --dry-run para probar sin enviar)")
 
+    activo = cfg["ACTIVOS"][args.simbolo]
+    activo_nombre = activo["nombre"]
     datos = await obtener_datos(args, cfg, red, progreso)
 
     print("🧠 Calculando estructura, zonas y liquidez...")
@@ -415,15 +419,15 @@ async def principal(args, cfg, activas, red, progreso, token, chat_id):
                    key=lambda z: (z["dir"] != "COMPRA", smc._distancia(z, precio)))
     y_min, y_max = rango_eje_y(df15, args.velas_grafico)
     fuera = smc.zonas_fuera_de_rango(res, precio, y_min, y_max, k=cfg["MAX_FUERA_RANGO"])
-    mensaje = armar_mensaje(res, cands, precio, df15.index[-1], fuera)
+    mensaje = armar_mensaje(res, cands, precio, df15.index[-1], fuera, activo_nombre)
     print("\n" + mensaje + "\n")
     print(f"(precio actual {precio:.2f} | zonas M15 totales {len(res['M15']['zonas'])} | "
           f"candidatas {len(cands)} | H1/H4 fuera del eje {len(fuera)})")
 
-    fig = construir_figura(df15, res, cands, args.velas_grafico, activas, fuera)
-    ruta_png = "reporte_smc.png"
+    fig = construir_figura(df15, res, cands, args.velas_grafico, activas, fuera, activo_nombre)
+    ruta_png = activo["png"]
     if args.dry_run:
-        ruta_html = "reporte_smc.html"
+        ruta_html = activo["html"]
         fig.write_html(ruta_html, include_plotlyjs="cdn")
         print(f"💾 HTML guardado: {os.path.abspath(ruta_html)}")
     exportar_png(fig, ruta_png, cfg["TIMEOUT_PNG_S"])
@@ -459,7 +463,7 @@ def correr(args, timeout=None):
         motivo = f"timeout de {limite:.0f}s" + (f" mientras descargaba {tf}" if tf else "")
     except Exception as e:
         motivo = f"error inesperado ({type(e).__name__}): {e}"
-    notificar_error(motivo, token, chat_id, args.dry_run)
+    notificar_error(motivo, token, chat_id, args.dry_run, nombre=cfg["ACTIVOS"][args.simbolo]["nombre"])
     return 1
 
 
@@ -477,7 +481,8 @@ if __name__ == "__main__":
         # responde a la cancelación), ni wait_for ni asyncio.run terminan. Esto garantiza el fin del proceso.
         if not _AVISADO.is_set():
             notificar_error(f"el proceso no terminó en {_red['TIMEOUT_GLOBAL_S']}s (watchdog)",
-                            os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHAT_ID"), argumentos.dry_run)
+                            os.getenv("TELEGRAM_TOKEN"), os.getenv("TELEGRAM_CHAT_ID"), argumentos.dry_run,
+                            nombre=smc.CONFIG["ACTIVOS"][argumentos.simbolo]["nombre"])
         os._exit(1)
 
     vigilante = threading.Timer(_red["TIMEOUT_GLOBAL_S"], _matar_por_cuelgue)

@@ -1,0 +1,30 @@
+name: Reporte SMC Lite V75
+
+on:
+  workflow_dispatch: # Solo manual / disparado por el servicio de cronjob externo
+
+jobs:
+  ejecutar-reporte-smc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5 # Seguro anti-zombies (el script se corta solo a los 180 s)
+
+    steps:
+    - name: Clonar el código
+      uses: actions/checkout@v4
+
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Instalar librerías
+      run: |
+        python -m pip install --upgrade pip
+        pip install websockets pandas numpy "plotly<6" requests kaleido==0.2.1
+
+    - name: Generar reporte SMC y enviar a Telegram
+      env:
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        PYTHONUNBUFFERED: "1"
+      run: python reporte_smc.py --simbolo V75

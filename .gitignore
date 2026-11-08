@@ -8,3 +8,6 @@ __pycache__/
 
 # Caché local de velas (solo --dry-run)
 .cache_smc/
+
+reporte_smc_*.png
+reporte_smc_*.html

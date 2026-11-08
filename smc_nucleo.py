@@ -49,6 +49,12 @@ CONFIG = {
     },
     "CACHE_MAX_EDAD_S": 3600,         # solo --dry-run: reutiliza las velas si tienen menos de 1 hora
     "TIMEOUT_PNG_S": 40,              # tope para exportar el PNG (kaleido puede colgarse sin lanzar error)
+    # Activos soportados (--simbolo). Mismos parámetros de detección para todos.
+    "ACTIVOS": {
+        "BOOM500":  {"codigo": "BOOM500",  "nombre": "BOOM 500",      "png": "reporte_smc.png",         "html": "reporte_smc.html",         "cache": "BOOM500"},
+        "BOOM1000": {"codigo": "BOOM1000", "nombre": "BOOM 1000",     "png": "reporte_smc_BOOM1000.png", "html": "reporte_smc_BOOM1000.html", "cache": "BOOM1000"},
+        "V75":      {"codigo": "R_75",     "nombre": "Volatility 75", "png": "reporte_smc_V75.png",      "html": "reporte_smc_V75.html",      "cache": "V75"},
+    },
     # --- Capas opcionales (Fase 2/3; lógica aún no implementada) ---
     "CAPAS": {
         "fvg_ifc": False,             # Fase 2
