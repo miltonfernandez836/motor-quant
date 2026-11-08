@@ -25,7 +25,7 @@ from datos_smc import ErrorDescarga, cargar_cache, descargar_todo, guardar_cache
 SIMBOLO = "BOOM500"
 NOMBRE_ACTIVO = "BOOM 500"
 LIMITE_CAPTION = 1024           # máximo de texto de una foto en Telegram
-FIN_MENSAJE = "Lista de zonas vivas, no es señal de entrada"
+FIN_MENSAJE = "No es señal de entrada."
 VELA_S = 900
 
 # Capas opcionales cuya lógica ya está implementada (Fase 1: ninguna)
@@ -38,63 +38,73 @@ COLOR = {  # (relleno, borde)
 
 
 # =====================================================================
-# Fichas
+# Mensaje (imagen + texto como caption, máx. 1024 caracteres)
 # =====================================================================
-def _ok(v):
-    return "OK" if v else "NO"
-
-
-def _nivel(x):
-    return f"{x:.1f}" if x is not None else "sin dato"
-
-
-def ficha_texto(z):
-    """Ficha de verificación en español sencillo (una línea por zona)."""
-    partes = [
-        f"OB {z['tipo']} {z['dir']}",
-        f"{z['bajo']:.1f} - {z['alto']:.1f}",
-        z["estado"],
-        f"R1 barrió liquidez {_ok(z['r1'])}",
-        f"R2 BOS {_ok(z['r2'])}",
-        f"R3 IRL formada {_ok(z['r3'])}",
-        f"R4 no mitigada {_ok(z['estado'] != 'mitigada')}",
-        f"{z['puntaje']} de 4",
-        f"TP1 {_nivel(z.get('tp1'))}",
-        f"TP final {_nivel(z.get('tp_final'))}",
-        f"sesgo H1: {z['sesgo_h1']} | H4: {z['sesgo_h4']}",
-        smc.clasificar_pd(z.get("pos_tr")),
-    ]
-    if z["contra"]:
-        partes.append("⚠ CONTRA SESGO " + "/".join(z["contra"]))
-    return " | ".join(partes)
+MESES = ("ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic")
+FLECHA = {"alcista": "↑", "bajista": "↓"}          # 'rango' (u otro) -> ↔
+LEYENDA = "R1 liquidez barrida · R2 rompió estructura · R3 punto interno · R4 sin mitigar"
 
 
 def encabezado_sesgo(res):
     return f"H4: {res['H4']['sesgo']} | H1: {res['H1']['sesgo']}"
 
 
-def etiqueta_corta(z):
-    return f"{'EXT' if z['tipo'] == 'Extremo' else 'DEC'} {z['puntaje']}/4"
+def etiqueta_corta(n, z):
+    return f"{n} · {'EXT' if z['tipo'] == 'Extremo' else 'DEC'} {z['puntaje']}/4"
 
 
-def linea_fuera(f):
-    """Una zona H1/H4 viva que queda fuera del eje visible del gráfico."""
-    lado = "arriba" if f["arriba"] else "abajo"
-    return (f"• {f['tf']} {f['tipo']} {f['dir']} | {f['bajo']:.1f} - {f['alto']:.1f} | "
-            f"{f['dist_pct']:+.1f}% ({lado})")
+def linea_zona(n, z):
+    """N · bajo–alto · tipo · X/4 · falla R# (solo las que fallan) · TP {TP1} [· premium/descuento/fuera TR]."""
+    fallan = [r for r, ok in (("R1", z["r1"]), ("R2", z["r2"]), ("R3", z["r3"]),
+                              ("R4", z["estado"] != "mitigada")) if not ok]
+    tp1 = z.get("tp1")
+    partes = [str(n), f"{z['bajo']:.0f}–{z['alto']:.0f}", z["tipo"], f"{z['puntaje']}/4"]
+    if fallan:
+        partes.append("falla " + " ".join(fallan))
+    partes.append(f"TP {tp1:.0f}" if tp1 is not None else "TP s/d")
+    pos = z.get("pos_tr")
+    if pos is not None:
+        partes.append("fuera TR" if pos < 0 or pos > 100 else ("descuento" if pos < 50 else "premium"))
+    return " · ".join(partes)
 
 
-def armar_mensaje(res, cands, fuera=()):
-    lineas = [f"📊 {NOMBRE_ACTIVO} M15 | {encabezado_sesgo(res)}", ""]
-    if cands:
-        lineas += [f"{i}) {ficha_texto(z)}" for i, z in enumerate(cands, 1)]
-    else:
-        lineas.append("Sin zonas vivas (frescas o tocadas) por ahora.")
-    if fuera:
-        lineas += ["", "Zonas H1/H4 vivas fuera del gráfico (distancia al precio):"]
-        lineas += [linea_fuera(f) for f in fuera]
-    lineas += ["", FIN_MENSAJE]
-    return "\n".join(lineas)
+def linea_fuera(fuera):
+    """Las 2 zonas H1/H4 fuera del gráfico más cercanas al precio y '+N más'."""
+    if not fuera:
+        return ""
+    partes = [f"{f['tf']} {f['dir'].lower()} {(f['alto'] if not f['arriba'] else f['bajo']):.0f} "
+              f"({f['dist_pct']:+.1f}%)" for f in fuera[:2]]
+    if len(fuera) > 2:
+        partes.append(f"+{len(fuera) - 2} más")
+    return "Fuera del gráfico: " + " · ".join(partes)
+
+
+def armar_mensaje(res, cands, precio, hora, fuera=()):
+    """Texto del caption. 'cands' ya viene en el orden de numeración (el mismo del gráfico):
+    COMPRA primero y luego VENTA, cada una por cercanía. Si pasa de 1024 caracteres se recorta
+    primero la línea de zonas fuera del gráfico; las fichas nunca se recortan."""
+    sesgo = lambda tf: FLECHA.get(res[tf]["sesgo"], "↔")
+    cab = [f"📊 {NOMBRE_ACTIVO} M15 · {hora.day} {MESES[hora.month - 1]} {hora:%H:%M} · Precio {precio:.0f}",
+           f"Sesgo: H4 {sesgo('H4')} · H1 {sesgo('H1')}"]
+    bloques = []
+    for dir_, icono in (("COMPRA", "🟢"), ("VENTA", "🔴")):
+        zs = [(n, z) for n, z in enumerate(cands, 1) if z["dir"] == dir_]
+        if zs:
+            contra = any(z["contra"] for _, z in zs)
+            bloques.append([f"{icono} {dir_} " + ("(⚠ contra sesgo)" if contra else "(a favor del sesgo)")]
+                           + [linea_zona(n, z) for n, z in zs])
+    if not bloques:
+        bloques.append(["Sin zonas vivas (frescas o tocadas) por ahora."])
+
+    def armar(con_fuera):
+        secciones = ["\n".join(cab)] + ["\n".join(b) for b in bloques] + [LEYENDA]
+        if con_fuera and fuera:
+            secciones.append(linea_fuera(fuera))
+        secciones.append(FIN_MENSAJE)
+        return "\n\n".join(secciones)
+
+    texto = armar(True)
+    return texto if len(texto) <= LIMITE_CAPTION else armar(False)
 
 
 # =====================================================================
@@ -240,7 +250,7 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=()):
                     textfont=dict(size=11, color="#ffb74d"))
 
     # --- Zonas vivas M15 (rectángulos desde la vela del OB hasta el borde derecho)
-    for z in cands:
+    for n, z in enumerate(cands, 1):
         grupo = f"OB {z['tipo']}"
         relleno, borde = COLOR[z["dir"]]
         nacio_antes = z["idx_ob"] < i0
@@ -250,7 +260,7 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=()):
                     line=dict(color=borde, width=1.5, dash="solid" if z["tipo"] == "Extremo" else "dash"))
         capas.trazo(grupo, x=[xa, x_der], y=[z["medio"], z["medio"]], mode="lines",
                     line=dict(color=borde, width=0.8, dash="dot"))
-        texto = etiqueta_corta(z)
+        texto = etiqueta_corta(n, z)
         if nacio_antes:   # nació antes de la ventana visible: se indica su fecha de origen
             texto += f" · desde {index[z['idx_ob']].strftime('%d/%m %H:%M')}"
         capas.trazo(grupo, x=[xa], y=[z["alto"]], mode="text", text=[texto],
@@ -273,22 +283,13 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=()):
 # Telegram
 # =====================================================================
 def enviar_telegram(token, chat_id, ruta_png, mensaje):
-    """Foto con el mensaje como pie; si no cabe (1024), pie corto + mensaje aparte."""
-    base = f"https://api.telegram.org/bot{token}"
-    corto = len(mensaje) <= LIMITE_CAPTION
+    """Un único mensaje: la foto con el texto como pie (máx. 1024 caracteres)."""
     with open(ruta_png, "rb") as foto:
-        r = requests.post(f"{base}/sendPhoto", timeout=60, files={"photo": foto},
-                          data={"chat_id": chat_id,
-                                "caption": mensaje if corto else mensaje.split("\n")[0]})
+        r = requests.post(f"https://api.telegram.org/bot{token}/sendPhoto", timeout=60,
+                          files={"photo": foto}, data={"chat_id": chat_id, "caption": mensaje})
     if r.status_code != 200:
         print(f"❌ Error al enviar la foto: {r.text}")
         return False
-    if not corto:
-        r = requests.post(f"{base}/sendMessage", timeout=60,
-                          data={"chat_id": chat_id, "text": mensaje})
-        if r.status_code != 200:
-            print(f"❌ Error al enviar el mensaje: {r.text}")
-            return False
     return True
 
 
@@ -409,10 +410,12 @@ async def principal(args, cfg, activas, red, progreso, token, chat_id):
     res = smc.analizar(datos, cfg)
     df15 = datos["M15"]
     precio = float(df15["close"].iloc[-1])
-    cands = smc.ordenar_fichas(smc.candidatas(res["M15"], precio), precio)
+    # Numeración N (mensaje y gráfico): COMPRA primero y VENTA después, cada una por cercanía al precio
+    cands = sorted(smc.candidatas(res["M15"], precio),
+                   key=lambda z: (z["dir"] != "COMPRA", smc._distancia(z, precio)))
     y_min, y_max = rango_eje_y(df15, args.velas_grafico)
     fuera = smc.zonas_fuera_de_rango(res, precio, y_min, y_max, k=cfg["MAX_FUERA_RANGO"])
-    mensaje = armar_mensaje(res, cands, fuera)
+    mensaje = armar_mensaje(res, cands, precio, df15.index[-1], fuera)
     print("\n" + mensaje + "\n")
     print(f"(precio actual {precio:.2f} | zonas M15 totales {len(res['M15']['zonas'])} | "
           f"candidatas {len(cands)} | H1/H4 fuera del eje {len(fuera)})")
