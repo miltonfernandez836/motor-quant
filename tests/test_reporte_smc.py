@@ -94,7 +94,7 @@ def test_zonas_fuera_del_grafico_van_en_una_linea_y_se_recortan_primero(mundo):
 
 def test_el_eje_y_no_se_estira_y_las_flechas_marcan_el_borde(mundo):
     df, res, precio, cands = mundo
-    rango = rep.rango_eje_y(df, 400)
+    rango = rep.rango_eje_y(df, 400, cands)
     fuera = [{"tf": "H1", "tipo": "Extremo", "dir": "VENTA", "bajo": rango[1] * 2, "alto": rango[1] * 2.1,
               "arriba": True, "dist_pct": 100.0},
              {"tf": "H4", "tipo": "Extremo", "dir": "COMPRA", "bajo": rango[0] / 3, "alto": rango[0] / 2,

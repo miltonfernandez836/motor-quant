@@ -140,11 +140,13 @@ class Capas:
         self.fig.add_trace(go.Scatter(legendgroup=nombre, showlegend=False, **kw))
 
 
-def rango_eje_y(df15, n_velas):
-    """Rango del eje Y = velas visibles + 4%. El eje NUNCA se estira para incluir zonas lejanas."""
+def rango_eje_y(df15, n_velas, cands=()):
+    """Rango del eje Y = velas visibles + todas las zonas M15 dibujadas, con un margen del 1%.
+    Las zonas H1/H4 lejanas NO lo estiran (van como flecha en el borde)."""
     vis = df15.iloc[-n_velas:]
-    ymin, ymax = float(vis["low"].min()), float(vis["high"].max())
-    pad = (ymax - ymin) * 0.04
+    ymin = min([float(vis["low"].min())] + [z["bajo"] for z in cands])
+    ymax = max([float(vis["high"].max())] + [z["alto"] for z in cands])
+    pad = (ymax - ymin) * 0.01
     return [ymin - pad, ymax + pad]
 
 
@@ -157,7 +159,7 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE
     xs = [_x(index, i) for i in range(i0, n_tot)]
     x_izq = xs[0]
     x_der = (index[-1] + pd.Timedelta(seconds=VELA_S * 8)).strftime("%Y-%m-%d %H:%M:%S")
-    rango_y = rango_eje_y(df15, n_velas)
+    rango_y = rango_eje_y(df15, n_velas, cands)
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
@@ -178,6 +180,7 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE
 
     # --- Franjas de fondo H1 / H4 (zonas vivas que tocan el rango visible del eje Y)
     precio = float(df15["close"].iloc[-1])
+    rotulos = []   # (y, tf, texto) de las franjas: se separan verticalmente al final
     for tf in ("H4", "H1"):
         r = res[tf]
         grupo = f"Franjas {tf}"
@@ -188,21 +191,33 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE
             capas.trazo(grupo, x=xr, y=yr, mode="lines", fill="toself",
                         fillcolor="rgba(144,164,174,0.10)" if tf == "H1" else "rgba(120,144,156,0.14)",
                         line=dict(color="rgba(144,164,174,0.35)", width=1, dash="dot"))
-            capas.trazo(grupo, x=[x_der], y=[z["alto"]], mode="text", textposition="top left",
-                        text=[f"{tf} {'EXT' if z['tipo'] == 'Extremo' else 'DEC'} {z['dir'][0]}"],
-                        textfont=dict(size=10, color="#b0bec5"))
+            rotulos.append((z["alto"], tf, f"{tf} {'EXT' if z['tipo'] == 'Extremo' else 'DEC'} {z['dir'][0]}"))
+
 
     # --- Flechas en el borde del gráfico: zonas H1/H4 vivas fuera del eje (el eje no se estira)
     span = rango_y[1] - rango_y[0]
+    ys_flechas = []   # posiciones fijas de las etiquetas de flecha (también cuentan para la separación)
     x_flecha = (index[-1] + pd.Timedelta(seconds=VELA_S * 5)).strftime("%Y-%m-%d %H:%M:%S")
     for arriba in (True, False):
         for k, f in enumerate([f for f in fuera if f["arriba"] == arriba]):
             y = rango_y[1] - span * (0.03 + 0.035 * k) if arriba else rango_y[0] + span * (0.03 + 0.035 * k)
+            ys_flechas.append(y)
             capas.trazo(f"Franjas {f['tf']}", x=[x_flecha], y=[y], mode="markers+text",
                         marker=dict(symbol="triangle-up" if arriba else "triangle-down", size=11,
                                     color="#cfd8dc"),
                         text=[f"{f['tf']} {f['bajo']:.0f}-{f['alto']:.0f} ({f['dist_pct']:+.1f}%)"],
                         textposition="middle left", textfont=dict(size=10, color="#cfd8dc"))
+
+    # Etiquetas H1/H4 del borde derecho: separación vertical mínima entre ellas y respecto a las flechas
+    sep = span * 0.03
+    puestas = list(ys_flechas)
+    for y, tf, texto in sorted(rotulos):
+        paso = sep if y < (rango_y[0] + rango_y[1]) / 2 else -sep   # se aleja hacia el centro del gráfico
+        while any(abs(y - q) < sep for q in puestas):
+            y += paso
+        puestas.append(y)
+        capas.trazo(f"Franjas {tf}", x=[x_der], y=[y], mode="text", textposition="top left",
+                    text=[texto], textfont=dict(size=10, color="#b0bec5"), cliponaxis=False)
 
     # --- TR de trabajo (último ESTABLECIDO): su 50% separa premium de descuento
     tr = m15["tr_trabajo"]
@@ -263,8 +278,11 @@ def construir_figura(df15, res, cands, n_velas, activas, fuera=(), nombre=NOMBRE
         texto = etiqueta_corta(n, z)
         if nacio_antes:   # nació antes de la ventana visible: se indica su fecha de origen
             texto += f" · desde {index[z['idx_ob']].strftime('%d/%m %H:%M')}"
-        capas.trazo(grupo, x=[xa], y=[z["alto"]], mode="text", text=[texto],
-                    textposition="top right", textfont=dict(size=12, color="white"))
+        # Si la zona empieza cerca del borde derecho, la etiqueta va hacia la izquierda (no se corta)
+        cerca_borde = (z["idx_ob"] - i0) / max(1, n_tot - i0 + 8) > 0.8
+        capas.trazo(grupo, x=[xa], y=[z["alto"]], mode="text", text=[texto], cliponaxis=False,
+                    textposition="top left" if cerca_borde else "top right",
+                    textfont=dict(size=12, color="white"))
 
     # --- Capas opcionales (Fase 2/3): se agregan aquí cuando tengan lógica
     for nombre in sorted(activas & CAPAS_IMPLEMENTADAS):
@@ -415,9 +433,9 @@ async def principal(args, cfg, activas, red, progreso, token, chat_id):
     df15 = datos["M15"]
     precio = float(df15["close"].iloc[-1])
     # Numeración N (mensaje y gráfico): COMPRA primero y VENTA después, cada una por cercanía al precio
-    cands = sorted(smc.candidatas(res["M15"], precio),
+    cands = sorted(smc.candidatas(res["M15"], precio, sin_solape=True),
                    key=lambda z: (z["dir"] != "COMPRA", smc._distancia(z, precio)))
-    y_min, y_max = rango_eje_y(df15, args.velas_grafico)
+    y_min, y_max = rango_eje_y(df15, args.velas_grafico, cands)
     fuera = smc.zonas_fuera_de_rango(res, precio, y_min, y_max, k=cfg["MAX_FUERA_RANGO"])
     mensaje = armar_mensaje(res, cands, precio, df15.index[-1], fuera, activo_nombre)
     print("\n" + mensaje + "\n")

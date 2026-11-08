@@ -524,8 +524,12 @@ def clasificar_pd(pos):
     return f"{'descuento' if pos < 50 else 'premium'} {pos:.0f}% del TR"
 
 
-def candidatas(res_tf, precio, k=None):
-    """Zonas fresca/tocada, ordenadas por cercanía al precio actual (máx. k)."""
+def candidatas(res_tf, precio, k=None, sin_solape=False):
+    """Zonas fresca/tocada, ordenadas por cercanía al precio actual (máx. k).
+
+    sin_solape=True: antes de elegir las k más cercanas, de cada grupo de zonas de la misma dirección
+    que se solapan en más del 50% de la altura de la menor se conserva la de mayor puntaje (si empatan,
+    la más cercana al precio). Se recorre por prioridad: una zona se descarta si solapa con otra ya conservada."""
     k = k or res_tf["cfg"]["MAX_ZONAS_FICHA"]
     vivas = [z for z in res_tf["zonas"] if z["estado"] in ESTADOS_CANDIDATOS]
 
@@ -533,6 +537,15 @@ def candidatas(res_tf, precio, k=None):
         if z["bajo"] <= precio <= z["alto"]:
             return 0.0
         return min(abs(precio - z["alto"]), abs(precio - z["bajo"]))
+    if sin_solape:
+        conservadas = []
+        for z in sorted(vivas, key=lambda z: (-z["puntaje"], dist(z))):
+            def solapa(o):
+                comun = min(z["alto"], o["alto"]) - max(z["bajo"], o["bajo"])
+                return z["dir"] == o["dir"] and comun > 0.5 * min(z["alto"] - z["bajo"], o["alto"] - o["bajo"])
+            if not any(solapa(o) for o in conservadas):
+                conservadas.append(z)
+        vivas = conservadas
     return sorted(vivas, key=dist)[:k]
 
 
