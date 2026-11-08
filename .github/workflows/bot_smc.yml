@@ -1,12 +1,47 @@
-name: Reporte SMC Lite BOOM500
+name: Reporte SMC Lite
 
 on:
   workflow_dispatch: # Solo manual / disparado por el servicio de cronjob externo
+    inputs:
+      simbolo:
+        description: "Activo a reportar (TODOS = los tres, uno tras otro)"
+        required: false
+        type: choice
+        default: TODOS
+        options:
+          - TODOS
+          - BOOM500
+          - BOOM1000
+          - V75
 
 jobs:
+  preparar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      activos: ${{ steps.lista.outputs.activos }}
+    steps:
+    - name: Elegir activos (sin entradas desde la API = TODOS)
+      id: lista
+      env:
+        SIMBOLO: ${{ inputs.simbolo }}
+      run: |
+        if [ -z "$SIMBOLO" ] || [ "$SIMBOLO" = "TODOS" ]; then
+          echo 'activos=["BOOM500","BOOM1000","V75"]' >> "$GITHUB_OUTPUT"
+        else
+          echo "activos=[\"$SIMBOLO\"]" >> "$GITHUB_OUTPUT"
+        fi
+
   ejecutar-reporte-smc:
+    name: Reporte SMC ${{ matrix.simbolo }}
+    needs: preparar
     runs-on: ubuntu-latest
     timeout-minutes: 5 # Seguro anti-zombies (el script se corta solo a los 180 s)
+    strategy:
+      fail-fast: false # si un activo falla, los otros siguen
+      max-parallel: 1  # uno tras otro (evita RateLimit de Deriv)
+      matrix:
+        simbolo: ${{ fromJSON(needs.preparar.outputs.activos) }}
 
     steps:
     - name: Clonar el código
@@ -27,4 +62,4 @@ jobs:
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         PYTHONUNBUFFERED: "1"
-      run: python reporte_smc.py
+      run: python reporte_smc.py --simbolo ${{ matrix.simbolo }}
