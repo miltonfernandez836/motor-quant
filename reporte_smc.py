@@ -357,6 +357,25 @@ def configurar_capas(texto):
     return cfg, pedidas
 
 
+def exportar_png(fig, ruta, timeout_s):
+    """Exporta el PNG en un hilo daemon con tope: kaleido puede colgarse sin lanzar ningún error."""
+    resultado = {}
+
+    def _trabajo():
+        try:
+            fig.write_image(ruta)
+        except BaseException as e:
+            resultado["error"] = e
+
+    hilo = threading.Thread(target=_trabajo, daemon=True)
+    hilo.start()
+    hilo.join(timeout_s)
+    if hilo.is_alive():
+        raise ErrorReporte(f"kaleido no respondió (más de {timeout_s:.0f} s exportando el PNG)")
+    if "error" in resultado:
+        raise ErrorReporte(f"no se pudo generar el PNG (¿kaleido?): {resultado['error']!r}") from resultado["error"]
+
+
 def perfil_de_red(cfg, args):
     return cfg["RED_LARGO"] if args.modo_largo else cfg["RED"]
 
@@ -404,10 +423,7 @@ async def principal(args, cfg, activas, red, progreso, token, chat_id):
         ruta_html = "reporte_smc.html"
         fig.write_html(ruta_html, include_plotlyjs="cdn")
         print(f"💾 HTML guardado: {os.path.abspath(ruta_html)}")
-    try:
-        fig.write_image(ruta_png)
-    except Exception as e:
-        raise ErrorReporte(f"no se pudo generar el PNG (¿kaleido?): {e!r}") from e
+    exportar_png(fig, ruta_png, cfg["TIMEOUT_PNG_S"])
     print(f"✅ PNG guardado: {os.path.abspath(ruta_png)}")
 
     if args.dry_run:

@@ -48,6 +48,7 @@ CONFIG = {
         "PAUSA_S": 3,
     },
     "CACHE_MAX_EDAD_S": 3600,         # solo --dry-run: reutiliza las velas si tienen menos de 1 hora
+    "TIMEOUT_PNG_S": 40,              # tope para exportar el PNG (kaleido puede colgarse sin lanzar error)
     # --- Capas opcionales (Fase 2/3; lógica aún no implementada) ---
     "CAPAS": {
         "fvg_ifc": False,             # Fase 2
