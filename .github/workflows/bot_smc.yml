@@ -15,33 +15,13 @@ on:
           - V75
 
 jobs:
-  preparar:
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      activos: ${{ steps.lista.outputs.activos }}
-    steps:
-    - name: Elegir activos (sin entradas desde la API = TODOS)
-      id: lista
-      env:
-        SIMBOLO: ${{ inputs.simbolo }}
-      run: |
-        if [ -z "$SIMBOLO" ] || [ "$SIMBOLO" = "TODOS" ]; then
-          echo 'activos=["BOOM500","BOOM1000","V75"]' >> "$GITHUB_OUTPUT"
-        else
-          echo "activos=[\"$SIMBOLO\"]" >> "$GITHUB_OUTPUT"
-        fi
-
   ejecutar-reporte-smc:
-    name: Reporte SMC ${{ matrix.simbolo }}
-    needs: preparar
     runs-on: ubuntu-latest
-    timeout-minutes: 5 # Seguro anti-zombies (el script se corta solo a los 180 s)
-    strategy:
-      fail-fast: false # si un activo falla, los otros siguen
-      max-parallel: 1  # uno tras otro (evita RateLimit de Deriv)
-      matrix:
-        simbolo: ${{ fromJSON(needs.preparar.outputs.activos) }}
+    timeout-minutes: 15 # Seguro anti-zombies (cada activo se corta solo a los 180 s)
+    env:
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      PYTHONUNBUFFERED: "1"
 
     steps:
     - name: Clonar el código
@@ -51,15 +31,27 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: 'pip'
+        cache-dependency-path: .github/workflows/bot_smc.yml # no hay requirements.txt: la clave de la caché es este archivo
 
     - name: Instalar librerías
       run: |
         python -m pip install --upgrade pip
         pip install websockets pandas numpy "plotly<6" requests kaleido==0.2.1
 
-    - name: Generar reporte SMC y enviar a Telegram
-      env:
-        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        PYTHONUNBUFFERED: "1"
-      run: python reporte_smc.py --simbolo ${{ matrix.simbolo }}
+    # Un paso por activo, uno tras otro. Con simbolo=TODOS (o sin entradas, disparo por API) corren los tres;
+    # si uno falla los siguientes igual corren y el job queda en rojo.
+    - name: Reporte SMC BOOM500
+      if: ${{ !cancelled() && (inputs.simbolo == '' || inputs.simbolo == 'TODOS' || inputs.simbolo == 'BOOM500') }}
+      timeout-minutes: 4
+      run: python reporte_smc.py --simbolo BOOM500
+
+    - name: Reporte SMC BOOM1000
+      if: ${{ !cancelled() && (inputs.simbolo == '' || inputs.simbolo == 'TODOS' || inputs.simbolo == 'BOOM1000') }}
+      timeout-minutes: 4
+      run: python reporte_smc.py --simbolo BOOM1000
+
+    - name: Reporte SMC V75
+      if: ${{ !cancelled() && (inputs.simbolo == '' || inputs.simbolo == 'TODOS' || inputs.simbolo == 'V75') }}
+      timeout-minutes: 4
+      run: python reporte_smc.py --simbolo V75
