@@ -67,13 +67,13 @@ HTML = """<!doctype html>
  body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:16px;text-align:center}
  img{max-width:100%;height:auto;border:1px solid #333}
  button{font-size:1.1rem;padding:.7rem 1.4rem;margin:.4rem;border:0;border-radius:6px;cursor:pointer}
- #si{background:#26a69a;color:#fff} #no{background:#ef5350;color:#fff} #bajar{background:#455a64;color:#fff}
+ #si{background:#26a69a;color:#fff} #no{background:#ef5350;color:#fff} #bajar{background:#455a64;color:#fff} #deshacer{background:#8d6e63;color:#fff}
  #cont{margin:.6rem 0;font-size:1.05rem} #aviso{color:#ffb74d;font-size:.9rem}
 </style></head><body>
 <div id="cont"></div>
 <div id="vista"></div>
 <div><button id="si">Operaría</button><button id="no">No operaría</button></div>
-<div><button id="bajar">Descargar etiquetas.csv</button></div>
+<div><button id="deshacer">Deshacer</button><button id="bajar">Descargar etiquetas.csv</button></div>
 <div id="aviso"></div>
 <script>
 const ZONAS = __ZONAS__;
@@ -95,6 +95,7 @@ function pintar(){
     : "Zona " + (hechas + 1) + " de " + ZONAS.length + " · etiquetadas: " + hechas;
   document.getElementById("vista").innerHTML = i === undefined ? "" : '<img src="galeria/' + ZONAS[i].img + '" alt="zona">';
   document.getElementById("si").disabled = document.getElementById("no").disabled = (i === undefined);
+  document.getElementById("deshacer").disabled = (hechas === 0);
   document.getElementById("aviso").textContent = sinGuardar ? "Aviso: este navegador no permite guardar el avance; descarga las etiquetas antes de cerrar." : "";
 }
 function etiquetar(d){
@@ -102,6 +103,12 @@ function etiquetar(d){
   estado.etiquetas[ZONAS[i].id] = {decision: d, fecha: new Date().toISOString()};
   guardar(); pintar();
 }
+function deshacer(){   // vuelve a la zona anterior (la última etiquetada) y borra su etiqueta
+  const ids = Object.keys(estado.etiquetas); if (!ids.length) return;
+  const ultimo = ids[ids.length - 1];   // las claves conservan el orden en que se etiquetó
+  delete estado.etiquetas[ultimo]; guardar(); pintar();
+}
+document.getElementById("deshacer").onclick = deshacer;
 document.getElementById("si").onclick = () => etiquetar("si");
 document.getElementById("no").onclick = () => etiquetar("no");
 document.getElementById("bajar").onclick = () => {
